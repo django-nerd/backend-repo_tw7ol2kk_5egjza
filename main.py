@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Any, Dict
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import ContactMessage, Pledge
+
+app = FastAPI(title="SAM Foundation Charity Trust API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,11 +19,11 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "SAM Foundation Charity Trust API is running"}
 
 @app.get("/api/hello")
 def hello():
-    return {"message": "Hello from the backend API!"}
+    return {"message": "Welcome to SAM Foundation Charity Trust"}
 
 @app.get("/test")
 def test_database():
@@ -33,9 +38,6 @@ def test_database():
     }
     
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
             response["database_url"] = "✅ Configured"
@@ -52,8 +54,6 @@ def test_database():
         else:
             response["database"] = "⚠️  Available but not initialized"
             
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
     
@@ -64,6 +64,51 @@ def test_database():
     
     return response
 
+# Public schemas endpoint for tooling
+@app.get("/schema")
+def get_schema() -> Dict[str, Any]:
+    return {
+        "collections": {
+            "contactmessage": ContactMessage.model_json_schema(),
+            "pledge": Pledge.model_json_schema(),
+        }
+    }
+
+# Contact message submission
+@app.post("/api/contact")
+def submit_contact(message: ContactMessage):
+    try:
+        inserted_id = create_document("contactmessage", message)
+        return {"status": "success", "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Donation pledge submission
+@app.post("/api/pledge")
+def submit_pledge(pledge: Pledge):
+    try:
+        inserted_id = create_document("pledge", pledge)
+        return {"status": "success", "id": inserted_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Recent pledges (limited)
+@app.get("/api/pledges")
+def list_pledges(limit: int = 10):
+    try:
+        docs = get_documents("pledge", limit=limit)
+        # Convert ObjectId and datetime fields to strings for JSON
+        def normalize(doc):
+            doc = dict(doc)
+            if "_id" in doc:
+                doc["id"] = str(doc.pop("_id"))
+            for k, v in list(doc.items()):
+                if hasattr(v, "isoformat"):
+                    doc[k] = v.isoformat()
+            return doc
+        return [normalize(d) for d in docs]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
